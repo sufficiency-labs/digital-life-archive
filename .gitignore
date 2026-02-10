@@ -1,0 +1,15 @@
+.venv/
+app/auth_token
+app/certs/
+__pycache__/
+*.pyc
+.env
+*.pem
+*.key
+sync-status.json
+config/*-token.json
+config/*-credentials.json
+signal-backups-key.txt
+.mine-emails-state.json
+data/
+staging/

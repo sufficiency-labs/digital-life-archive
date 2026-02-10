@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Archive Console</title>
+<link rel="manifest" href="/static/manifest.json">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'SF Mono','Fira Code',monospace;background:#0a0a0a;color:#e0e0e0;
+  min-height:100vh;display:flex;flex-direction:column}
+header{background:#111;padding:0.5rem 1rem;display:flex;justify-content:space-between;
+  align-items:center;border-bottom:1px solid #222}
+header h1{font-size:0.9rem;color:#7fba6a}
+header .ts{font-size:0.7rem;color:#666}
+nav{display:flex;gap:0;background:#111;border-bottom:1px solid #333;overflow-x:auto}
+nav button{background:transparent;color:#888;border:none;padding:0.6rem 1rem;
+  font-family:inherit;font-size:0.8rem;cursor:pointer;border-bottom:2px solid transparent;
+  white-space:nowrap}
+nav button.active{color:#7fba6a;border-bottom-color:#7fba6a}
+nav button:hover{color:#e0e0e0}
+.page{display:none;flex:1;overflow-y:auto;padding:1rem}
+.page.active{display:block}
+.card{background:#1a1a1a;border:1px solid #333;border-radius:6px;padding:1rem;margin-bottom:0.8rem}
+.card h3{color:#7fba6a;font-size:0.85rem;margin-bottom:0.5rem}
+.card p,.card pre{font-size:0.8rem;color:#aaa;white-space:pre-wrap;word-break:break-word}
+.stat{display:inline-block;margin-right:1.5rem;margin-bottom:0.5rem}
+.stat .label{font-size:0.7rem;color:#666;text-transform:uppercase}
+.stat .value{font-size:1.1rem;color:#7fba6a}
+.stat .value.warn{color:#e6a817}
+.stat .value.error{color:#e05555}
+input[type="text"],input[type="search"],textarea{background:#111;color:#e0e0e0;
+  border:1px solid #444;padding:0.5rem;font-family:inherit;font-size:0.85rem;width:100%;
+  border-radius:4px}
+button.btn{background:#2d5a27;color:#e0e0e0;border:none;padding:0.5rem 1rem;
+  font-family:inherit;cursor:pointer;border-radius:4px;font-size:0.8rem}
+button.btn:hover{background:#3a7a33}
+.toast{position:fixed;bottom:1rem;left:50%;transform:translateX(-50%);
+  background:#2d5a27;color:#e0e0e0;padding:0.5rem 1.5rem;border-radius:4px;
+  font-size:0.8rem;z-index:1000;display:none}
+.toast.error{background:#8b2020}
+.file-content{background:#111;padding:1rem;border-radius:4px;font-size:0.8rem;
+  white-space:pre-wrap;word-break:break-word;overflow-x:auto;max-height:70vh;overflow-y:auto}
+.file-content.md h1,.file-content.md h2,.file-content.md h3{color:#7fba6a;margin:0.8rem 0 0.4rem}
+.file-content.md h1{font-size:1.1rem} .file-content.md h2{font-size:0.95rem}
+.file-content.md h3{font-size:0.85rem}
+.file-content.md p{margin:0.4rem 0}
+.file-content.md li{margin-left:1.5rem}
+.file-content.md a{color:#5b9bd5}
+.file-content.md code{background:#222;padding:0.1rem 0.3rem;border-radius:2px;font-size:0.85em}
+.file-content.md pre{background:#151515;padding:0.8rem;border-radius:4px;overflow-x:auto}
+.file-content.md table{border-collapse:collapse;margin:0.5rem 0}
+.file-content.md th,.file-content.md td{border:1px solid #444;padding:0.3rem 0.6rem;font-size:0.8rem}
+.file-content.md th{background:#1a1a1a;color:#7fba6a}
+.breadcrumb{font-size:0.8rem;color:#888;margin-bottom:0.8rem}
+.breadcrumb a{color:#5b9bd5;cursor:pointer;text-decoration:none}
+.breadcrumb a:hover{text-decoration:underline}
+.dir-entry{padding:0.4rem 0.6rem;border-bottom:1px solid #222;font-size:0.85rem;cursor:pointer}
+.dir-entry:hover{background:#1a1a1a}
+.dir-entry .icon{color:#7fba6a;margin-right:0.5rem}
+#fileEditor{width:100%;min-height:50vh;resize:vertical}
+</style>
+</head>
+<body>
+<header>
+  <h1>archive console</h1>
+  <span class="ts" id="headerTime"></span>
+</header>
+<nav>
+  <button class="active" onclick="showPage('status',this)">status</button>
+  <button onclick="showPage('email',this)">email</button>
+  <button onclick="showPage('files',this)">files</button>
+  <button onclick="showPage('queue',this)">queue</button>
+  <button onclick="showPage('people',this)">people</button>
+</nav>
+
+<div id="page-status" class="page active"></div>
+<div id="page-email" class="page">
+  <div style="display:flex;gap:0.5rem;margin-bottom:1rem">
+    <input type="search" id="emailQuery" placeholder="notmuch search..." onkeydown="if(event.key==='Enter')searchEmail()">
+    <button class="btn" onclick="searchEmail()">search</button>
+  </div>
+  <div id="emailResults"></div>
+</div>
+<div id="page-files" class="page">
+  <div id="fileBreadcrumb" class="breadcrumb"></div>
+  <div id="fileContent"></div>
+</div>
+<div id="page-queue" class="page"></div>
+<div id="page-people" class="page">
+  <input type="search" id="peopleSearch" placeholder="search people..." oninput="filterPeople()">
+  <div id="peopleList" style="margin-top:0.8rem"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let currentFilePath = '';
+let allContacts = [];
+
+function showPage(name, btn, noPush) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+  document.getElementById('page-' + name).classList.add('active');
+  if (btn) btn.classList.add('active');
+  else document.querySelectorAll('nav button').forEach(b => {
+    if (b.textContent.trim() === name) b.classList.add('active');
+  });
+  if (!noPush) history.pushState({page: name}, '', '#' + name);
+  if (name === 'status') loadStatus();
+  if (name === 'files' && !currentFilePath) loadFiles('');
+  if (name === 'queue') loadQueue();
+  if (name === 'people') loadPeople();
+  updateTimestamp();
+}
+
+window.addEventListener('popstate', function(e) {
+  const state = e.state;
+  if (state && state.page) showPage(state.page, null, true);
+  else showPage('status', null, true);
+});
+
+function updateTimestamp() {
+  const now = new Date();
+  document.getElementById('headerTime').textContent =
+    now.getHours().toString().padStart(2,'0') + ':' + now.getMinutes().toString().padStart(2,'0');
+}
+
+function toast(msg, isError) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast' + (isError ? ' error' : '');
+  t.style.display = 'block';
+  setTimeout(() => t.style.display = 'none', 3000);
+}
+
+function escHtml(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+function renderMd(text) {
+  return text
+    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+    .replace(/^## (.+)$/gm, '<h2>$1</h2>')
+    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
+    .replace(/^\- \[x\] (.+)$/gm, '<li style="list-style:none">&#9745; $1</li>')
+    .replace(/^\- \[ \] (.+)$/gm, '<li style="list-style:none">&#9744; $1</li>')
+    .replace(/^\- (.+)$/gm, '<li>$1</li>')
+    .replace(/^\|(.+)\|$/gm, function(m, row) {
+      if (row.match(/^[\s\-|]+$/)) return '';
+      const cells = row.split('|').map(c => '<td>' + c.trim() + '</td>').join('');
+      return '<tr>' + cells + '</tr>';
+    })
+    .replace(/(<tr>.*<\/tr>\n?)+/gs, '<table>$&</table>')
+    .replace(/\n\n/g, '<br><br>')
+    .replace(/\n/g, '\n');
+}
+
+// --- Status ---
+async function loadStatus() {
+  const page = document.getElementById('page-status');
+  page.innerHTML = '<p style="color:#666">loading...</p>';
+  try {
+    const r = await fetch('/api/status');
+    const d = await r.json();
+    let html = '<div class="card">';
+    html += '<div class="stat"><span class="label">disk</span><br><span class="value">' +
+      d.disk.used_gb + 'GB / ' + d.disk.total_gb + 'GB (' + d.disk.pct + '%)</span></div>';
+    html += '<div class="stat"><span class="label">email</span><br><span class="value">' +
+      (d.email_count || '?') + '</span></div>';
+    if (d.processes.rclone > 0)
+      html += '<div class="stat"><span class="label">rclone</span><br><span class="value">' +
+        d.processes.rclone + ' running</span></div>';
+    if (d.processes.mbsync > 0)
+      html += '<div class="stat"><span class="label">mbsync</span><br><span class="value">' +
+        d.processes.mbsync + ' running</span></div>';
+    html += '</div>';
+
+    if (d.sync_status) {
+      html += '<div class="card"><h3>sync status</h3>';
+      for (const [src, info] of Object.entries(d.sync_status.sources || {})) {
+        const cls = info.status === 'ok' ? 'value' : info.status === 'error' ? 'value error' : 'value warn';
+        html += '<div class="stat"><span class="label">' + src + '</span><br><span class="' + cls + '">' +
+          info.status + '</span></div>';
+      }
+      html += '</div>';
+    }
+
+    if (d.data_sizes) {
+      html += '<div class="card"><h3>data sizes</h3>';
+      for (const [name, size] of Object.entries(d.data_sizes)) {
+        html += '<div class="stat"><span class="label">' + name + '</span><br><span class="value">' + size + '</span></div>';
+      }
+      html += '</div>';
+    }
+
+    if (d.queued_tasks && d.queued_tasks.length > 0) {
+      html += '<div class="card"><h3>queued tasks</h3>';
+      d.queued_tasks.forEach(t => {
+        const color = t.priority === 'high' ? '#e6a817' : t.status.includes('done') ? '#666' : '#aaa';
+        html += '<p style="color:' + color + '">[' + t.priority + '] ' + t.file + ' — ' + t.status + '</p>';
+      });
+      html += '</div>';
+    }
+
+    page.innerHTML = html;
+  } catch(e) { page.innerHTML = '<p style="color:#e05555">Failed to load status</p>'; }
+}
+
+// --- Email ---
+async function searchEmail() {
+  const q = document.getElementById('emailQuery').value;
+  if (!q) return;
+  const el = document.getElementById('emailResults');
+  el.innerHTML = '<p style="color:#666">searching...</p>';
+  try {
+    const r = await fetch('/api/search/email?q=' + encodeURIComponent(q));
+    const d = await r.json();
+    if (!d.results || d.results.length === 0) { el.innerHTML = '<p>No results.</p>'; return; }
+    el.innerHTML = d.results.map(t =>
+      '<div class="card" onclick="loadThread(\'' + t.thread + '\')" style="cursor:pointer">' +
+      '<h3>' + escHtml(t.subject || '(no subject)') + '</h3>' +
+      '<p>' + escHtml(t.authors) + ' — ' + t.date_relative + ' (' + t.total + ' msgs)</p></div>'
+    ).join('');
+  } catch(e) { el.innerHTML = '<p style="color:#e05555">Search failed</p>'; }
+}
+
+async function loadThread(threadId) {
+  const el = document.getElementById('emailResults');
+  try {
+    const r = await fetch('/api/email/' + threadId);
+    const d = await r.json();
+    let html = '<div style="margin-bottom:0.5rem"><a style="color:#5b9bd5;cursor:pointer" onclick="searchEmail()">back to results</a></div>';
+    d.messages.forEach(m => {
+      html += '<div class="card"><h3>' + escHtml(m.subject) + '</h3>';
+      html += '<p style="color:#888;font-size:0.75rem">' + escHtml(m.from) + ' &rarr; ' + escHtml(m.to) + '<br>' + escHtml(m.date) + '</p>';
+      html += '<pre style="margin-top:0.5rem">' + escHtml(m.body) + '</pre></div>';
+    });
+    el.innerHTML = html;
+  } catch(e) { toast('Failed to load thread', true); }
+}
+
+// --- Files ---
+async function loadFiles(path) {
+  currentFilePath = path;
+  const el = document.getElementById('fileContent');
+  el.innerHTML = '<p style="color:#666">loading...</p>';
+  try {
+    const r = await fetch('/api/files?path=' + encodeURIComponent(path));
+    const d = await r.json();
+
+    // Breadcrumb
+    const bc = document.getElementById('fileBreadcrumb');
+    const parts = path ? path.split('/') : [];
+    let bcHtml = '<a onclick="loadFiles(\'\')">root</a>';
+    let cumPath = '';
+    parts.forEach((p, i) => {
+      cumPath += (i > 0 ? '/' : '') + p;
+      bcHtml += ' / <a onclick="loadFiles(\'' + cumPath + '\')">' + p + '</a>';
+    });
+    bc.innerHTML = bcHtml;
+
+    if (d.type === 'directory') {
+      el.innerHTML = d.entries.map(e =>
+        '<div class="dir-entry" onclick="loadFiles(\'' + (path ? path + '/' : '') + e.name + '\')">' +
+        '<span class="icon">' + (e.is_dir ? '&#128193;' : '&#128196;') + '</span>' +
+        e.name + (e.size != null ? ' <span style="color:#666;font-size:0.75rem">(' + (e.size/1024).toFixed(1) + 'KB)</span>' : '') +
+        '</div>'
+      ).join('');
+    } else if (d.content != null) {
+      const isMd = path.endsWith('.md');
+      let html = '<div style="margin-bottom:0.5rem">';
+      html += '<button class="btn" id="editToggle" onclick="toggleFileEdit()">edit</button> ';
+      html += '<button class="btn" id="saveBtn" style="display:none" onclick="saveFile()">save & commit</button>';
+      html += '</div>';
+      html += '<div id="fileRendered">';
+      html += isMd
+        ? '<div class="file-content md">' + renderMd(d.content) + '</div>'
+        : '<div class="file-content">' + escHtml(d.content) + '</div>';
+      html += '</div>';
+      html += '<textarea id="fileEditor" style="display:none">' + escHtml(d.content) + '</textarea>';
+      el.innerHTML = html;
+    } else {
+      el.innerHTML = '<p>File too large to display inline (' + (d.size/1024/1024).toFixed(1) + ' MB)</p>';
+    }
+  } catch(e) { el.innerHTML = '<p style="color:#e05555">Failed to load</p>'; }
+}
+
+function toggleFileEdit() {
+  const rendered = document.getElementById('fileRendered');
+  const editor = document.getElementById('fileEditor');
+  const saveBtn = document.getElementById('saveBtn');
+  const toggle = document.getElementById('editToggle');
+  if (editor.style.display === 'none') {
+    rendered.style.display = 'none';
+    editor.style.display = 'block';
+    saveBtn.style.display = 'inline-block';
+    toggle.textContent = 'preview';
+  } else {
+    const isMd = currentFilePath.endsWith('.md');
+    rendered.innerHTML = isMd
+      ? '<div class="file-content md">' + renderMd(editor.value) + '</div>'
+      : '<div class="file-content">' + escHtml(editor.value) + '</div>';
+    rendered.style.display = 'block';
+    editor.style.display = 'none';
+    saveBtn.style.display = 'none';
+    toggle.textContent = 'edit';
+  }
+}
+
+async function saveFile() {
+  const editor = document.getElementById('fileEditor');
+  const form = new FormData();
+  form.append('path', currentFilePath);
+  form.append('content', editor.value);
+  try {
+    const r = await fetch('/api/files/save', { method: 'POST', body: form });
+    const d = await r.json();
+    if (d.status === 'saved') toast('Saved & committed: ' + currentFilePath);
+    else toast('Error: ' + (d.detail || 'save failed'), true);
+  } catch(e) { toast('Save failed', true); }
+}
+
+// --- Queue ---
+async function loadQueue() {
+  const page = document.getElementById('page-queue');
+  page.innerHTML = '<p style="color:#666">loading...</p>';
+  try {
+    const r = await fetch('/api/queue');
+    const d = await r.json();
+    page.innerHTML = d.tasks.map(t => {
+      const color = t.priority === 'high' ? '#e6a817' : '#aaa';
+      const done = t.status.includes('done');
+      return '<div class="card" style="' + (done ? 'opacity:0.5' : '') + '">' +
+        '<h3 style="color:' + color + '">[' + t.priority + '] ' + escHtml(t.title) + '</h3>' +
+        '<p style="font-size:0.75rem;color:#666">Status: ' + t.status + '</p>' +
+        '<div class="file-content md" style="margin-top:0.5rem;max-height:200px;overflow:hidden">' +
+        renderMd(t.content) + '</div></div>';
+    }).join('') || '<p>No queued tasks.</p>';
+  } catch(e) { page.innerHTML = '<p style="color:#e05555">Failed to load queue</p>'; }
+}
+
+// --- People ---
+async function loadPeople() {
+  try {
+    const r = await fetch('/api/contacts');
+    const d = await r.json();
+    allContacts = d.contacts || [];
+    renderPeople(allContacts);
+  } catch(e) { toast('Failed to load people', true); }
+}
+
+function filterPeople() {
+  const q = document.getElementById('peopleSearch').value.toLowerCase();
+  renderPeople(allContacts.filter(c => c.name.toLowerCase().includes(q) || c.context.toLowerCase().includes(q)));
+}
+
+function renderPeople(contacts) {
+  const el = document.getElementById('peopleList');
+  el.innerHTML = contacts.map(c =>
+    '<div class="card" onclick="showPerson(\'' + c.slug + '\')" style="cursor:pointer">' +
+    '<h3>' + escHtml(c.name) + '</h3>' +
+    '<p>' + escHtml(c.context) + '</p></div>'
+  ).join('') || '<p>No contacts found.</p>';
+}
+
+async function showPerson(slug) {
+  const el = document.getElementById('peopleList');
+  try {
+    const r = await fetch('/api/contacts/' + slug);
+    const d = await r.json();
+    el.innerHTML = '<div style="margin-bottom:0.5rem"><a style="color:#5b9bd5;cursor:pointer" onclick="renderPeople(allContacts)">back</a></div>' +
+      '<div class="file-content md">' + renderMd(d.content) + '</div>';
+  } catch(e) { toast('Failed to load contact', true); }
+}
+
+// Init
+history.replaceState({page: 'status'}, '', '#status');
+loadStatus();
+updateTimestamp();
+</script>
+</body>
+</html>
